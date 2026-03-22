@@ -173,6 +173,8 @@ class ShopManager:
                 sale_date TEXT NOT NULL,
                 subtotal REAL NOT NULL,
                 discount REAL NOT NULL,
+                gst_percent REAL NOT NULL DEFAULT 0,
+                tax_amount REAL NOT NULL DEFAULT 0,
                 grand_total REAL NOT NULL,
                 paid REAL NOT NULL,
                 due REAL NOT NULL,
@@ -204,12 +206,19 @@ class ShopManager:
             );
             """
         )
+        self.ensure_column("sales", "gst_percent", "REAL NOT NULL DEFAULT 0")
+        self.ensure_column("sales", "tax_amount", "REAL NOT NULL DEFAULT 0")
         self.set_setting("shop_name", SHOP_NAME, if_missing=True)
         self.set_setting("telegram_enabled", "0", if_missing=True)
         self.set_setting("app_pin", hash_pin("1234"), if_missing=True)
         self.set_setting("telegram_chat_id", "", if_missing=True)
         self.set_setting("telegram_last_update_id", "0", if_missing=True)
         self.conn.commit()
+
+    def ensure_column(self, table_name, column_name, definition):
+        columns = [row["name"] for row in self.conn.execute(f"PRAGMA table_info({table_name})").fetchall()]
+        if column_name not in columns:
+            self.conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")
 
     def set_setting(self, key, value, if_missing=False):
         if if_missing:
@@ -422,7 +431,10 @@ class ShopManager:
             return False, "At least one valid sale line is required."
         subtotal = round(sum(line["line_total"] for line in sale_lines), 2)
         discount = safe_float(form.get("discount"), 0)
-        grand_total = round(max(subtotal - discount, 0), 2)
+        gst_percent = safe_float(form.get("gst_percent"), 0)
+        taxable_total = round(max(subtotal - discount, 0), 2)
+        tax_amount = round((taxable_total * gst_percent) / 100, 2)
+        grand_total = round(taxable_total + tax_amount, 2)
         payment_mode = safe_text(form.get("payment_mode"), "cash")
         paid = safe_float(form.get("paid"), 0 if payment_mode == "credit" else grand_total)
         if paid > grand_total:
@@ -434,8 +446,8 @@ class ShopManager:
         invoice_no = self.next_invoice_no()
         cur = self.conn.execute(
             """
-            INSERT INTO sales(invoice_no, customer_id, sale_date, subtotal, discount, grand_total, paid, due, payment_mode, note)
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO sales(invoice_no, customer_id, sale_date, subtotal, discount, gst_percent, tax_amount, grand_total, paid, due, payment_mode, note)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 invoice_no,
@@ -443,6 +455,8 @@ class ShopManager:
                 today_string(),
                 subtotal,
                 discount,
+                gst_percent,
+                tax_amount,
                 grand_total,
                 paid,
                 due,
@@ -1000,6 +1014,9 @@ th,td{{padding:10px 8px;border-bottom:1px solid #262626;text-align:left}}
 th{{color:#a3a3a3;font-weight:600}}
 .note{{font-size:.9rem;color:#8d8d8d}}
 .section-tag{{display:inline-flex;padding:6px 10px;border-radius:999px;background:#1f1f1f;color:#ffbc42;font-size:.78rem;margin-bottom:8px}}
+.preview-box{{background:#101010;border:1px solid rgba(255,255,255,.06);border-radius:16px;padding:14px;margin-top:12px}}
+.preview-row{{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid #232323}}
+.preview-row:last-child{{border-bottom:none}}
 .bottom-nav{{position:fixed;left:50%;transform:translateX(-50%);bottom:12px;width:min(96vw,820px);background:rgba(17,17,17,.94);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.08);border-radius:22px;padding:10px 8px;display:grid;grid-template-columns:repeat(5,1fr);gap:8px;z-index:30;box-shadow:0 20px 50px rgba(0,0,0,.35)}}
 .bottom-nav a{{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:10px 6px;border-radius:16px;text-decoration:none;color:#bdbdbd;font-size:.8rem}}
 .bottom-nav a.active{{background:#ffb02e;color:#151515;font-weight:700}}
@@ -1015,6 +1032,7 @@ th{{color:#a3a3a3;font-weight:600}}
 <h1>{h(manager.shop_name())}</h1>
 <p>{h(t["tagline"])}</p>
 <p>{h(t["open_phone"])}: <strong>{h(phone_link)}</strong></p>
+<p>Fast billing, GST-ready totals, UPI/credit tracking, aur stock visibility ek jagah.</p>
 <div class="hero-actions">
 <a class="phone-link" href="{h(phone_link)}" target="_blank">{h(t["open_phone"])}</a>
 <button class="phone-link" style="border:none;cursor:pointer" onclick="installApp()">Install App</button>
@@ -1043,12 +1061,12 @@ th{{color:#a3a3a3;font-weight:600}}
 <div class="stack">
 {card("Dashboard Snapshot", f"<div class='section-tag'>Today</div><div class='subtle'>Cash Rs {metrics['cash']:.2f} | Due Rs {metrics['due']:.2f} | Purchase Rs {metrics['purchases']:.2f}</div><div class='subtle' style='margin-top:8px'>Expense Rs {metrics['expenses']:.2f} | Gross profit Rs {metrics['profit']:.2f}</div>")}
 {card(t["quick_entry"], f"<div id='quick-entry-panel'></div><div class='section-tag'>Fastest Way</div><form method='post' action='/quick-entry'><input type='hidden' name='lang' value='{lang}'><textarea id='quickText' name='quick_text' rows='4' placeholder='{h(t['quick_help'])}'></textarea><div class='inline'><button type='submit'>{h(t['save'])}</button><button class='alt' type='button' onclick='startVoice()'>{h(t['voice'])}</button></div><div class='note'>Short spoken/text commands best kaam karte hain.</div></form>")}
-{card("Billing & Collection", f"<div id='sale-panel'></div><div class='section-tag'>Primary Flow</div><form method='post' action='/sale'><input type='hidden' name='lang' value='{lang}'><input name='customer_name' placeholder='Customer name'><input name='customer_phone' placeholder='Phone'><textarea name='items' rows='4' placeholder='One line each: sugar,2,50'></textarea><input name='discount' placeholder='Discount' value='0'><select name='payment_mode'><option value='cash'>Cash</option><option value='upi'>UPI</option><option value='card'>Card</option><option value='credit'>Credit/Udhaar</option></select><input name='paid' placeholder='Paid amount'><input name='note' placeholder='Note'><button type='submit'>Generate Bill</button></form><div class='inline' style='margin-top:10px'><form method='post' action='/customer-payment'><input type='hidden' name='lang' value='{lang}'><input name='customer_name' placeholder='Customer name'><input name='amount' placeholder='Amount received'><button class='alt' type='submit'>Receive Payment</button></form></div><div class='inline'><form method='post' action='/reverse-invoice'><input type='hidden' name='lang' value='{lang}'><input name='invoice_no' placeholder='Invoice no'><button class='alt' type='submit'>Reverse Invoice</button></form></div>")}
+{card("Billing & Collection", f"<div id='sale-panel'></div><div class='section-tag'>Primary Flow</div><form method='post' action='/sale'><input type='hidden' name='lang' value='{lang}'><input name='customer_name' placeholder='Customer name'><input name='customer_phone' placeholder='Phone / WhatsApp'><textarea id='saleItems' name='items' rows='4' placeholder='One line each: sugar,2,50'></textarea><div class='inline'><input id='saleDiscount' name='discount' placeholder='Discount' value='0'><input id='saleGst' name='gst_percent' placeholder='GST %' value='0'></div><select id='salePaymentMode' name='payment_mode'><option value='cash'>Cash</option><option value='upi'>UPI</option><option value='card'>Card</option><option value='credit'>Credit/Udhaar</option></select><input id='salePaid' name='paid' placeholder='Paid amount'><input name='note' placeholder='Note'><button type='submit'>Generate Bill</button></form><div class='preview-box'><strong>Current Bill Preview</strong><div class='note'>Billing apps me quick preview bahut useful hota hai, isliye live summary yahin dikh rahi hai.</div><div id='billPreview'></div></div><div class='inline' style='margin-top:10px'><form method='post' action='/customer-payment'><input type='hidden' name='lang' value='{lang}'><input name='customer_name' placeholder='Customer name'><input name='amount' placeholder='Amount received'><button class='alt' type='submit'>Receive Payment</button></form></div><div class='inline'><form method='post' action='/reverse-invoice'><input type='hidden' name='lang' value='{lang}'><input name='invoice_no' placeholder='Invoice no'><button class='alt' type='submit'>Reverse Invoice</button></form></div>")}
 {card("Inventory & Purchase", f"<div id='inventory-panel'></div><div class='section-tag'>Stock Room</div><form method='post' action='/add-item'><input type='hidden' name='lang' value='{lang}'><input name='name' placeholder='Item name'><input name='category' placeholder='Category'><input name='unit' placeholder='Unit'><input name='qty' placeholder='Opening qty'><input name='buy_price' placeholder='Buy price'><input name='sell_price' placeholder='Sell price'><input name='low_stock_limit' placeholder='Low stock limit' value='5'><button type='submit'>Add Item</button></form><div class='inline' style='margin-top:10px'><form method='post' action='/purchase'><input type='hidden' name='lang' value='{lang}'><input name='item_name' placeholder='Item name'><input name='vendor_name' placeholder='Vendor'><input name='qty' placeholder='Qty'><input name='rate' placeholder='Rate'><input name='paid' placeholder='Paid'><input name='note' placeholder='Note'><button class='alt' type='submit'>Restock</button></form></div><div class='inline'><form method='post' action='/adjust-stock'><input type='hidden' name='lang' value='{lang}'><input name='item_name' placeholder='Item name'><select name='adjustment_type'><option value='set'>Set qty</option><option value='add'>Add qty</option><option value='remove'>Remove qty</option></select><input name='qty' placeholder='Qty'><button class='alt' type='submit'>Adjust Stock</button></form></div>")}
 {card(t["inventory"], f"<input id='inventorySearch' placeholder='Search inventory...' oninput='filterInventory()'><div style='overflow:auto;margin-top:10px'><table id='inventoryTable'><thead><tr><th>Item</th><th>Category</th><th>Qty</th><th>Unit</th><th>Buy</th><th>Sell</th><th>Action</th></tr></thead><tbody>{inventory_html}</tbody></table></div><div class='note'>Saved entries isi deployed site me store hoti hain, isliye same account URL par phone aur PC dono updated data dekhenge.</div>")}
 </div>
 <div class="stack">
-{card("Smart Overview", f"<div class='section-tag'>At a Glance</div><div class='subtle'>Low stock items aur latest sales yahan quick scan ke liye rakhe gaye hain.</div><div style='margin-top:12px'><strong>Low Stock</strong><ul>{low_html}</ul><strong>Recent Sales</strong><ul>{sales_html}</ul></div>")}
+{card("Smart Overview", f"<div class='section-tag'>At a Glance</div><div class='subtle'>Indian shopkeepers ke liye sabse important cues: low stock, latest sale, udhaar, aur purchase movement.</div><div style='margin-top:12px'><strong>Low Stock</strong><ul>{low_html}</ul><strong>Recent Sales</strong><ul>{sales_html}</ul></div>")}
 {card(t["ledger"], f"<div id='ledger-panel'></div><div class='section-tag'>Ledger</div><strong>Customer Due</strong><ul>{customer_html}</ul><strong>Vendor Due</strong><ul>{vendor_html}</ul><div class='inline' style='margin-top:12px'><form method='post' action='/vendor-payment'><input type='hidden' name='lang' value='{lang}'><input name='vendor_name' placeholder='Vendor name'><input name='amount' placeholder='Amount paid'><button class='alt' type='submit'>Pay Vendor</button></form></div>")}
 {card("Recent Activity", f"<div class='section-tag'>Live Feed</div><ul>{activity_html}</ul>")}
 {card("Recent Purchases", f"<div class='section-tag'>Purchase Feed</div><ul>{purchases_html}</ul>")}
@@ -1095,6 +1113,39 @@ function filterInventory(){{
     row.style.display = row.innerText.toLowerCase().includes(term) ? '' : 'none';
   }});
 }}
+function updateBillPreview(){{
+  const items = (document.getElementById('saleItems')?.value || '').split('\\n').map(x => x.trim()).filter(Boolean);
+  const discount = parseFloat(document.getElementById('saleDiscount')?.value || '0') || 0;
+  const gst = parseFloat(document.getElementById('saleGst')?.value || '0') || 0;
+  let subtotal = 0;
+  let itemRows = '';
+  items.forEach(line => {{
+    const bits = line.split(',').map(x => x.trim());
+    if(bits.length >= 3){{
+      const name = bits[0];
+      const qty = parseFloat(bits[1] || '0') || 0;
+      const rate = parseFloat(bits[2] || '0') || 0;
+      const total = qty * rate;
+      subtotal += total;
+      itemRows += `<div class="preview-row"><span>${{name}} x ${{qty}}</span><strong>Rs ${{total.toFixed(2)}}</strong></div>`;
+    }}
+  }});
+  const taxable = Math.max(subtotal - discount, 0);
+  const tax = taxable * gst / 100;
+  const grand = taxable + tax;
+  const target = document.getElementById('billPreview');
+  if(!target) return;
+  target.innerHTML = itemRows +
+    `<div class="preview-row"><span>Subtotal</span><strong>Rs ${{subtotal.toFixed(2)}}</strong></div>` +
+    `<div class="preview-row"><span>Discount</span><strong>Rs ${{discount.toFixed(2)}}</strong></div>` +
+    `<div class="preview-row"><span>GST (${{gst.toFixed(2)}}%)</span><strong>Rs ${{tax.toFixed(2)}}</strong></div>` +
+    `<div class="preview-row"><span>Grand Total</span><strong>Rs ${{grand.toFixed(2)}}</strong></div>`;
+}}
+['saleItems','saleDiscount','saleGst'].forEach(id => {{
+  const el = document.getElementById(id);
+  if(el) el.addEventListener('input', updateBillPreview);
+}});
+updateBillPreview();
 document.querySelectorAll('.bottom-nav a').forEach(link => {{
   link.addEventListener('click', () => {{
     document.querySelectorAll('.bottom-nav a').forEach(x => x.classList.remove('active'));
@@ -1129,7 +1180,7 @@ table{{width:100%;border-collapse:collapse}} th,td{{padding:10px;border-bottom:1
 <h2>Invoice {h(sale['invoice_no'])}</h2>
 <p>Date: {h(sale['sale_date'])}<br>Customer: {h(sale['customer_name'])}<br>Phone: {h(sale['customer_phone'])}</p>
 <table><thead><tr><th>Item</th><th>Qty</th><th>Rate</th><th>Total</th></tr></thead><tbody>{rows}</tbody></table>
-<p>Subtotal: Rs {sale['subtotal']:.2f}<br>Discount: Rs {sale['discount']:.2f}<br>Grand Total: Rs {sale['grand_total']:.2f}<br>Paid: Rs {sale['paid']:.2f}<br>Due: Rs {sale['due']:.2f}<br>Payment: {h(sale['payment_mode'])}</p>
+<p>Subtotal: Rs {sale['subtotal']:.2f}<br>Discount: Rs {sale['discount']:.2f}<br>GST ({sale['gst_percent']:.2f}%): Rs {sale['tax_amount']:.2f}<br>Grand Total: Rs {sale['grand_total']:.2f}<br>Paid: Rs {sale['paid']:.2f}<br>Due: Rs {sale['due']:.2f}<br>Payment: {h(sale['payment_mode'])}</p>
 <div class="actions"><button onclick="window.print()">Print / Save PDF</button><a href="/">Back</a></div>
 </div></body></html>"""
 
