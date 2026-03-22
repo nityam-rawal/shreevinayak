@@ -213,6 +213,7 @@ class ShopManager:
         self.set_setting("app_pin", hash_pin("1234"), if_missing=True)
         self.set_setting("telegram_chat_id", "", if_missing=True)
         self.set_setting("telegram_last_update_id", "0", if_missing=True)
+        self.set_setting("public_base_url", "", if_missing=True)
         self.conn.commit()
 
     def ensure_column(self, table_name, column_name, definition):
@@ -253,12 +254,14 @@ class ShopManager:
         app_pin = safe_text(form.get("app_pin"))
         telegram_enabled = "1" if safe_text(form.get("telegram_enabled")).lower() in {"1", "y", "yes", "on", "true"} else "0"
         telegram_chat_id = safe_text(form.get("telegram_chat_id"))
+        public_base_url = safe_text(form.get("public_base_url")).rstrip("/")
         if shop_name:
             self.set_setting("shop_name", shop_name)
         if app_pin:
             self.set_setting("app_pin", hash_pin(app_pin))
         self.set_setting("telegram_enabled", telegram_enabled)
         self.set_setting("telegram_chat_id", telegram_chat_id)
+        self.set_setting("public_base_url", public_base_url)
         return True, "Settings updated."
 
     def next_invoice_no(self):
@@ -490,7 +493,11 @@ class ShopManager:
         if customer_id and due > 0:
             self.conn.execute("UPDATE customers SET balance = balance + ? WHERE id = ?", (due, customer_id))
         self.conn.commit()
-        self.maybe_send_telegram_alert(f"{self.shop_name()}\nSale {invoice_no}\nTotal Rs {grand_total:.2f}\nDue Rs {due:.2f}")
+        invoice_link = self.invoice_public_url(invoice_no)
+        message = f"{self.shop_name()}\nSale {invoice_no}\nTotal Rs {grand_total:.2f}\nDue Rs {due:.2f}"
+        if invoice_link:
+            message += f"\nInvoice Link: {invoice_link}"
+        self.maybe_send_telegram_alert(message)
         return True, f"Invoice created: {invoice_no}"
 
     def add_expense_record(self, form):
@@ -736,6 +743,23 @@ class ShopManager:
         ).fetchall()
         return sale, rows
 
+    def invoice_public_url(self, invoice_no):
+        base = self.get_setting("public_base_url", "").rstrip("/")
+        if not base:
+            return ""
+        return f"{base}/invoice?invoice_no={urllib.parse.quote(invoice_no)}"
+
+    def ledger_summary_text(self):
+        customer_rows = self.customer_ledgers()
+        vendor_rows = self.vendor_ledgers()
+        customer_text = "\n".join(
+            f"{row['name']}: Rs {row['balance']:.2f}" for row in customer_rows[:10]
+        ) or "No customer due."
+        vendor_text = "\n".join(
+            f"{row['name']}: Rs {row['balance']:.2f}" for row in vendor_rows[:10]
+        ) or "No vendor due."
+        return f"Customer Due:\n{customer_text}\n\nVendor Due:\n{vendor_text}"
+
     def reverse_invoice(self, invoice_no):
         sale = self.conn.execute("SELECT * FROM sales WHERE invoice_no = ?", (invoice_no,)).fetchone()
         if not sale:
@@ -807,8 +831,11 @@ class ShopManager:
             return (
                 "Commands:\n"
                 "/dashboard\n"
+                "/ledger\n"
                 "/lowstock\n"
                 "/stock item_name\n"
+                "/invoice\n"
+                "/invoice INV-YYYYMMDD-001\n"
                 "/quick sold 2 sugar to ramesh 50 credit\n"
                 "/quick bought 10 rice from gupta 45 paid 300"
             )
@@ -832,6 +859,44 @@ class ShopManager:
                 f"Expense Rs {data['expenses']:.2f}\n"
                 f"Profit Rs {data['profit']:.2f}"
             )
+        if lower == "/ledger":
+            return self.ledger_summary_text()
+        if lower == "/invoice":
+            invoice_no = self.latest_invoice_no()
+            if not invoice_no:
+                return "No invoice found."
+            sale, _ = self.invoice_detail(invoice_no)
+            link = self.invoice_public_url(invoice_no)
+            message = (
+                f"Latest Invoice: {invoice_no}\n"
+                f"Customer: {sale['customer_name']}\n"
+                f"Date: {sale['sale_date']}\n"
+                f"Grand Total: Rs {sale['grand_total']:.2f}\n"
+                f"Due: Rs {sale['due']:.2f}"
+            )
+            if link:
+                message += f"\nInvoice Link: {link}"
+            else:
+                message += "\nSet public_base_url in settings to get invoice link."
+            return message
+        if lower.startswith("/invoice "):
+            invoice_no = raw.split(" ", 1)[1].strip()
+            sale, _ = self.invoice_detail(invoice_no)
+            if not sale:
+                return "Invoice not found."
+            link = self.invoice_public_url(invoice_no)
+            message = (
+                f"Invoice: {invoice_no}\n"
+                f"Customer: {sale['customer_name']}\n"
+                f"Date: {sale['sale_date']}\n"
+                f"Grand Total: Rs {sale['grand_total']:.2f}\n"
+                f"Due: Rs {sale['due']:.2f}"
+            )
+            if link:
+                message += f"\nInvoice Link: {link}"
+            else:
+                message += "\nSet public_base_url in settings to get invoice link."
+            return message
         if lower.startswith("/quick "):
             ok, msg = self.quick_entry(raw[7:])
             return ("Success: " if ok else "Error: ") + msg
@@ -996,6 +1061,8 @@ body{{margin:0;font-family:Segoe UI,Arial,sans-serif;background:#0d0d0d;color:#f
 .action-tile.active{{border:1px dashed #ffb02e;box-shadow:inset 0 0 0 1px rgba(255,176,46,.12)}}
 .action-icon{{display:inline-flex;align-items:center;justify-content:center;width:38px;height:38px;border-radius:12px;background:#222;color:#ffb02e;font-weight:700}}
 .layout{{display:grid;grid-template-columns:1.15fr .95fr;gap:16px;margin-top:16px}}
+.view-panel{{display:none}}
+.view-panel.active{{display:block}}
 .stack{{display:grid;gap:16px}}
 .card{{background:#141414;border:1px solid rgba(255,255,255,.06);border-radius:22px;padding:18px;box-shadow:0 12px 28px rgba(0,0,0,.22)}}
 .card h2{{margin:0 0 12px;font-size:1.1rem;color:#fff}}
@@ -1030,9 +1097,7 @@ th{{color:#a3a3a3;font-weight:600}}
 <div class="hero">
 <div class="section-tag">Namaste, Shopkeeper</div>
 <h1>{h(manager.shop_name())}</h1>
-<p>{h(t["tagline"])}</p>
-<p>{h(t["open_phone"])}: <strong>{h(phone_link)}</strong></p>
-<p>Fast billing, GST-ready totals, UPI/credit tracking, aur stock visibility ek jagah.</p>
+<p>Smart retail workspace</p>
 <div class="hero-actions">
 <a class="phone-link" href="{h(phone_link)}" target="_blank">{h(t["open_phone"])}</a>
 <button class="phone-link" style="border:none;cursor:pointer" onclick="installApp()">Install App</button>
@@ -1056,30 +1121,73 @@ th{{color:#a3a3a3;font-weight:600}}
 <form method="post" action="/logout" class="inline"><button class="alt" type="submit">Logout</button></form>
 </div>
 {flash_html}
-<div class="quick-grid">{quick_actions}</div>
-<div class="layout">
-<div class="stack">
-{card("Dashboard Snapshot", f"<div class='section-tag'>Today</div><div class='subtle'>Cash Rs {metrics['cash']:.2f} | Due Rs {metrics['due']:.2f} | Purchase Rs {metrics['purchases']:.2f}</div><div class='subtle' style='margin-top:8px'>Expense Rs {metrics['expenses']:.2f} | Gross profit Rs {metrics['profit']:.2f}</div>")}
-{card(t["quick_entry"], f"<div id='quick-entry-panel'></div><div class='section-tag'>Fastest Way</div><form method='post' action='/quick-entry'><input type='hidden' name='lang' value='{lang}'><textarea id='quickText' name='quick_text' rows='4' placeholder='{h(t['quick_help'])}'></textarea><div class='inline'><button type='submit'>{h(t['save'])}</button><button class='alt' type='button' onclick='startVoice()'>{h(t['voice'])}</button></div><div class='note'>Short spoken/text commands best kaam karte hain.</div></form>")}
-{card("Billing & Collection", f"<div id='sale-panel'></div><div class='section-tag'>Primary Flow</div><form method='post' action='/sale'><input type='hidden' name='lang' value='{lang}'><input name='customer_name' placeholder='Customer name'><input name='customer_phone' placeholder='Phone / WhatsApp'><textarea id='saleItems' name='items' rows='4' placeholder='One line each: sugar,2,50'></textarea><div class='inline'><input id='saleDiscount' name='discount' placeholder='Discount' value='0'><input id='saleGst' name='gst_percent' placeholder='GST %' value='0'></div><select id='salePaymentMode' name='payment_mode'><option value='cash'>Cash</option><option value='upi'>UPI</option><option value='card'>Card</option><option value='credit'>Credit/Udhaar</option></select><input id='salePaid' name='paid' placeholder='Paid amount'><input name='note' placeholder='Note'><button type='submit'>Generate Bill</button></form><div class='preview-box'><strong>Current Bill Preview</strong><div class='note'>Billing apps me quick preview bahut useful hota hai, isliye live summary yahin dikh rahi hai.</div><div id='billPreview'></div></div><div class='inline' style='margin-top:10px'><form method='post' action='/customer-payment'><input type='hidden' name='lang' value='{lang}'><input name='customer_name' placeholder='Customer name'><input name='amount' placeholder='Amount received'><button class='alt' type='submit'>Receive Payment</button></form></div><div class='inline'><form method='post' action='/reverse-invoice'><input type='hidden' name='lang' value='{lang}'><input name='invoice_no' placeholder='Invoice no'><button class='alt' type='submit'>Reverse Invoice</button></form></div>")}
-{card("Inventory & Purchase", f"<div id='inventory-panel'></div><div class='section-tag'>Stock Room</div><form method='post' action='/add-item'><input type='hidden' name='lang' value='{lang}'><input name='name' placeholder='Item name'><input name='category' placeholder='Category'><input name='unit' placeholder='Unit'><input name='qty' placeholder='Opening qty'><input name='buy_price' placeholder='Buy price'><input name='sell_price' placeholder='Sell price'><input name='low_stock_limit' placeholder='Low stock limit' value='5'><button type='submit'>Add Item</button></form><div class='inline' style='margin-top:10px'><form method='post' action='/purchase'><input type='hidden' name='lang' value='{lang}'><input name='item_name' placeholder='Item name'><input name='vendor_name' placeholder='Vendor'><input name='qty' placeholder='Qty'><input name='rate' placeholder='Rate'><input name='paid' placeholder='Paid'><input name='note' placeholder='Note'><button class='alt' type='submit'>Restock</button></form></div><div class='inline'><form method='post' action='/adjust-stock'><input type='hidden' name='lang' value='{lang}'><input name='item_name' placeholder='Item name'><select name='adjustment_type'><option value='set'>Set qty</option><option value='add'>Add qty</option><option value='remove'>Remove qty</option></select><input name='qty' placeholder='Qty'><button class='alt' type='submit'>Adjust Stock</button></form></div>")}
-{card(t["inventory"], f"<input id='inventorySearch' placeholder='Search inventory...' oninput='filterInventory()'><div style='overflow:auto;margin-top:10px'><table id='inventoryTable'><thead><tr><th>Item</th><th>Category</th><th>Qty</th><th>Unit</th><th>Buy</th><th>Sell</th><th>Action</th></tr></thead><tbody>{inventory_html}</tbody></table></div><div class='note'>Saved entries isi deployed site me store hoti hain, isliye same account URL par phone aur PC dono updated data dekhenge.</div>")}
-</div>
-<div class="stack">
-{card("Smart Overview", f"<div class='section-tag'>At a Glance</div><div class='subtle'>Indian shopkeepers ke liye sabse important cues: low stock, latest sale, udhaar, aur purchase movement.</div><div style='margin-top:12px'><strong>Low Stock</strong><ul>{low_html}</ul><strong>Recent Sales</strong><ul>{sales_html}</ul></div>")}
-{card(t["ledger"], f"<div id='ledger-panel'></div><div class='section-tag'>Ledger</div><strong>Customer Due</strong><ul>{customer_html}</ul><strong>Vendor Due</strong><ul>{vendor_html}</ul><div class='inline' style='margin-top:12px'><form method='post' action='/vendor-payment'><input type='hidden' name='lang' value='{lang}'><input name='vendor_name' placeholder='Vendor name'><input name='amount' placeholder='Amount paid'><button class='alt' type='submit'>Pay Vendor</button></form></div>")}
-{card("Recent Activity", f"<div class='section-tag'>Live Feed</div><ul>{activity_html}</ul>")}
-{card("Recent Purchases", f"<div class='section-tag'>Purchase Feed</div><ul>{purchases_html}</ul>")}
-{card("Recent Expenses", f"<div class='section-tag'>Expense Feed</div><ul>{expenses_html}</ul>")}
-{card("Workspace Settings", f"<div id='settings-panel'></div><div class='section-tag'>Control</div><form method='post' action='/expense'><input type='hidden' name='lang' value='{lang}'><input name='category' placeholder='Expense type'><input name='amount' placeholder='Amount'><input name='note' placeholder='Note'><button type='submit'>Add Expense</button></form><div class='inline' style='margin-top:10px'><form method='post' action='/settings'><input type='hidden' name='lang' value='{lang}'><input name='shop_name' placeholder='Shop name' value='{h(manager.shop_name())}'><input name='app_pin' placeholder='New PIN'><input name='telegram_chat_id' placeholder='Telegram chat id' value='{h(manager.get_setting('telegram_chat_id',''))}'><label class='note'><input type='checkbox' name='telegram_enabled' value='1' {'checked' if manager.get_setting('telegram_enabled','0')=='1' else ''}> Telegram enabled</label><button class='alt' type='submit'>Save Settings</button></form></div><div class='note'>Telegram token ko host environment me set rakhiye.</div>")}
-</div>
-</div>
+<section class="view-panel active" id="view-home">
+  <div class="quick-grid">{quick_actions}</div>
+  <div class="layout">
+    <div class="stack">
+      {card("Dashboard Snapshot", f"<div class='section-tag'>Today</div><div class='subtle'>Cash Rs {metrics['cash']:.2f} | Due Rs {metrics['due']:.2f} | Purchase Rs {metrics['purchases']:.2f}</div><div class='subtle' style='margin-top:8px'>Expense Rs {metrics['expenses']:.2f} | Gross profit Rs {metrics['profit']:.2f}</div>")}
+      {card(t["quick_entry"], f"<div class='section-tag'>Fastest Way</div><form method='post' action='/quick-entry'><input type='hidden' name='lang' value='{lang}'><textarea id='quickText' name='quick_text' rows='4' placeholder='{h(t['quick_help'])}'></textarea><div class='inline'><button type='submit'>{h(t['save'])}</button><button class='alt' type='button' onclick='startVoice()'>{h(t['voice'])}</button></div></form>")}
+    </div>
+    <div class="stack">
+      {card("Smart Overview", f"<div class='section-tag'>At a Glance</div><strong>Low Stock</strong><ul>{low_html}</ul><strong>Recent Sales</strong><ul>{sales_html}</ul>")}
+      {card("Recent Activity", f"<div class='section-tag'>Live Feed</div><ul>{activity_html}</ul>")}
+    </div>
+  </div>
+</section>
+
+<section class="view-panel" id="view-ledger">
+  <div class="layout">
+    <div class="stack">
+      {card(t["ledger"], f"<div class='section-tag'>Ledger</div><strong>Customer Due</strong><ul>{customer_html}</ul><strong>Vendor Due</strong><ul>{vendor_html}</ul><div class='inline' style='margin-top:12px'><form method='post' action='/customer-payment'><input type='hidden' name='lang' value='{lang}'><input name='customer_name' placeholder='Customer name'><input name='amount' placeholder='Amount received'><button type='submit'>Receive</button></form></div><div class='inline'><form method='post' action='/vendor-payment'><input type='hidden' name='lang' value='{lang}'><input name='vendor_name' placeholder='Vendor name'><input name='amount' placeholder='Amount paid'><button class='alt' type='submit'>Pay Vendor</button></form></div>")}
+    </div>
+    <div class="stack">
+      {card("Recent Sales", f"<div class='section-tag'>Collection Trail</div><ul>{sales_html}</ul>")}
+      {card("Recent Expenses", f"<div class='section-tag'>Expenses</div><ul>{expenses_html}</ul>")}
+    </div>
+  </div>
+</section>
+
+<section class="view-panel" id="view-bill">
+  <div class="layout">
+    <div class="stack">
+      {card("Generate Bill", f"<div class='section-tag'>Billing</div><form method='post' action='/sale'><input type='hidden' name='lang' value='{lang}'><input name='customer_name' placeholder='Customer name'><input name='customer_phone' placeholder='Phone'><textarea id='saleItems' name='items' rows='4' placeholder='One line each: sugar,2,50'></textarea><div class='inline'><input id='saleDiscount' name='discount' placeholder='Discount' value='0'><input id='saleGst' name='gst_percent' placeholder='GST %' value='0'></div><select id='salePaymentMode' name='payment_mode'><option value='cash'>Cash</option><option value='upi'>UPI</option><option value='card'>Card</option><option value='credit'>Credit/Udhaar</option></select><input id='salePaid' name='paid' placeholder='Paid amount'><input name='note' placeholder='Note'><button type='submit'>Generate Bill</button></form>")}
+    </div>
+    <div class="stack">
+      {card("Current Bill", "<div id='billPreview' class='preview-box'></div>")}
+      {card("Bill Actions", f"<div class='section-tag'>Invoice</div><a class='phone-link' style='margin-top:0' href='/invoice?invoice_no={urllib.parse.quote(latest_invoice)}' target='_blank'>{'Open Last Invoice PDF' if latest_invoice else 'No Invoice Yet'}</a><div class='note' style='margin-top:10px'>Generate bill ke baad invoice page open hogi jahan se Print / Save PDF kar sakte ho.</div><div class='inline' style='margin-top:10px'><form method='post' action='/reverse-invoice'><input type='hidden' name='lang' value='{lang}'><input name='invoice_no' placeholder='Invoice no'><button class='alt' type='submit'>Reverse Invoice</button></form></div>")}
+    </div>
+  </div>
+</section>
+
+<section class="view-panel" id="view-stock">
+  <div class="layout">
+    <div class="stack">
+      {card("Stock Management", f"<div class='section-tag'>Inventory</div><form method='post' action='/add-item'><input type='hidden' name='lang' value='{lang}'><input name='name' placeholder='Item name'><input name='category' placeholder='Category'><input name='unit' placeholder='Unit'><input name='qty' placeholder='Opening qty'><input name='buy_price' placeholder='Buy price'><input name='sell_price' placeholder='Sell price'><input name='low_stock_limit' placeholder='Low stock limit' value='5'><button type='submit'>Add Product</button></form><div class='inline' style='margin-top:10px'><form method='post' action='/purchase'><input type='hidden' name='lang' value='{lang}'><input name='item_name' placeholder='Item name'><input name='vendor_name' placeholder='Vendor'><input name='qty' placeholder='Qty'><input name='rate' placeholder='Rate'><input name='paid' placeholder='Paid'><input name='note' placeholder='Note'><button class='alt' type='submit'>Restock</button></form></div><div class='inline'><form method='post' action='/adjust-stock'><input type='hidden' name='lang' value='{lang}'><input name='item_name' placeholder='Item name'><select name='adjustment_type'><option value='set'>Set qty</option><option value='add'>Add qty</option><option value='remove'>Remove qty</option></select><input name='qty' placeholder='Qty'><button class='alt' type='submit'>Adjust Stock</button></form></div>")}
+    </div>
+    <div class="stack">
+      {card("Stock List", f"<input id='inventorySearch' placeholder='Search products...' oninput='filterInventory()'><div style='overflow:auto;margin-top:10px'><table id='inventoryTable'><thead><tr><th>Item</th><th>Category</th><th>Qty</th><th>Unit</th><th>Buy</th><th>Sell</th><th>Action</th></tr></thead><tbody>{inventory_html}</tbody></table></div>")}
+      {card("Recent Purchases", f"<div class='section-tag'>Purchase Feed</div><ul>{purchases_html}</ul>")}
+    </div>
+  </div>
+</section>
+
+<section class="view-panel" id="view-settings">
+  <div class="layout">
+    <div class="stack">
+      {card("Telegram Connect", f"<div class='section-tag'>Connect</div><form method='post' action='/settings'><input type='hidden' name='lang' value='{lang}'><input name='shop_name' placeholder='Shop name' value='{h(manager.shop_name())}'><input name='app_pin' placeholder='New PIN'><input name='telegram_chat_id' placeholder='Telegram chat id' value='{h(manager.get_setting('telegram_chat_id',''))}'><input name='public_base_url' placeholder='Public site URL' value='{h(manager.get_setting('public_base_url',''))}'><label class='note'><input type='checkbox' name='telegram_enabled' value='1' {'checked' if manager.get_setting('telegram_enabled','0')=='1' else ''}> Telegram enabled</label><button type='submit'>Connect Telegram</button></form><div class='note'>Commands: /dashboard, /ledger, /lowstock, /stock item, /invoice</div>")}
+    </div>
+    <div class="stack">
+      {card("Expense Entry", f"<div class='section-tag'>Expense</div><form method='post' action='/expense'><input type='hidden' name='lang' value='{lang}'><input name='category' placeholder='Expense type'><input name='amount' placeholder='Amount'><input name='note' placeholder='Note'><button type='submit'>Add Expense</button></form>")}
+      {card("Recent Expenses", f"<div class='section-tag'>History</div><ul>{expenses_html}</ul>")}
+    </div>
+  </div>
+</section>
 <nav class="bottom-nav">
-<a class="active" href="#quick-entry-panel"><span class="nav-ico">Home</span><span>Home</span></a>
-<a href="#ledger-panel"><span class="nav-ico">Ledger</span><span>Ledger</span></a>
-<a href="#quick-entry-panel"><span class="nav-ico">AI</span><span>Quick</span></a>
-<a href="#sale-panel"><span class="nav-ico">Bill</span><span>Bill</span></a>
-<a href="#inventory-panel"><span class="nav-ico">Stock</span><span>Stock</span></a>
+<a class="active" href="#" data-view="home"><span class="nav-ico">Home</span><span>Home</span></a>
+<a href="#" data-view="ledger"><span class="nav-ico">Ledger</span><span>Ledger</span></a>
+<a href="#" data-view="bill"><span class="nav-ico">Bill</span><span>Bill</span></a>
+<a href="#" data-view="stock"><span class="nav-ico">Stock</span><span>Stock</span></a>
+<a href="#" data-view="settings"><span class="nav-ico">Link</span><span>Link</span></a>
 </nav>
 </div>
 <script>
@@ -1147,9 +1255,14 @@ function updateBillPreview(){{
 }});
 updateBillPreview();
 document.querySelectorAll('.bottom-nav a').forEach(link => {{
-  link.addEventListener('click', () => {{
+  link.addEventListener('click', (e) => {{
+    e.preventDefault();
     document.querySelectorAll('.bottom-nav a').forEach(x => x.classList.remove('active'));
     link.classList.add('active');
+    const view = link.dataset.view;
+    document.querySelectorAll('.view-panel').forEach(panel => panel.style.display = 'none');
+    const target = document.getElementById(`view-${{view}}`);
+    if(target) target.style.display = 'block';
   }});
 }});
 </script>
@@ -1279,6 +1392,9 @@ def app(environ, start_response):
             ok, message = manager.adjust_stock_record(form)
         elif path == "/sale":
             ok, message = manager.create_sale_record(form)
+            if ok and message.startswith("Invoice created: "):
+                invoice_no = message.split(": ", 1)[1]
+                return redirect(start_response, f"/invoice?invoice_no={urllib.parse.quote(invoice_no)}")
         elif path == "/reverse-invoice":
             ok, message = manager.reverse_invoice(form.get("invoice_no"))
         elif path == "/expense":
