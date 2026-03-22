@@ -40,6 +40,14 @@ Example host:
 web: gunicorn trial:app
 ```
 
+Render quick path:
+
+1. Open Render dashboard
+2. Create `New +` -> `Blueprint`
+3. Select this GitHub repo
+4. Render will read `render.yaml`
+5. Deploy
+
 ## Login
 
 - Default PIN: `1234`
