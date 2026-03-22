@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+shop_manager.db
+shop_manager.db-shm
+shop_manager.db-wal
+backups/
+exports/
+.env
