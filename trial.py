@@ -658,10 +658,47 @@ class ShopManager:
             """
         ).fetchall()
 
+    def recent_purchases(self):
+        return self.conn.execute(
+            """
+            SELECT p.bill_no, p.purchase_date, p.total, p.due, i.name AS item_name, COALESCE(v.name, 'Direct') AS vendor_name
+            FROM purchases p
+            JOIN items i ON i.id = p.item_id
+            LEFT JOIN vendors v ON v.id = p.vendor_id
+            ORDER BY p.id DESC
+            LIMIT 8
+            """
+        ).fetchall()
+
     def recent_expenses(self):
         return self.conn.execute(
             "SELECT id, expense_date, category, amount, note FROM expenses ORDER BY id DESC LIMIT 10"
         ).fetchall()
+
+    def recent_activity(self):
+        rows = []
+        for row in self.recent_sales():
+            rows.append({
+                "type": "sale",
+                "date": row["sale_date"],
+                "title": row["invoice_no"],
+                "detail": f"{row['customer_name']} | Rs {row['grand_total']:.2f}",
+            })
+        for row in self.recent_purchases():
+            rows.append({
+                "type": "purchase",
+                "date": row["purchase_date"],
+                "title": row["bill_no"],
+                "detail": f"{row['item_name']} from {row['vendor_name']} | Rs {row['total']:.2f}",
+            })
+        for row in self.recent_expenses():
+            rows.append({
+                "type": "expense",
+                "date": row["expense_date"],
+                "title": row["category"],
+                "detail": f"Rs {row['amount']:.2f}",
+            })
+        return rows[:12]
 
     def latest_invoice_no(self):
         row = self.conn.execute("SELECT invoice_no FROM sales ORDER BY id DESC LIMIT 1").fetchone()
@@ -865,7 +902,9 @@ def render_index(lang="hi", flash=""):
     customer_rows = manager.customer_ledgers()
     vendor_rows = manager.vendor_ledgers()
     sale_rows = manager.recent_sales()
+    purchase_rows = manager.recent_purchases()
     expense_rows = manager.recent_expenses()
+    activity_rows = manager.recent_activity()
     latest_invoice = manager.latest_invoice_no()
     phone_link = f"http://{local_ip()}:{PORT}"
     flash_html = f"<div class='flash'>{h(flash)}</div>" if flash else ""
@@ -889,50 +928,98 @@ def render_index(lang="hi", flash=""):
         f"<li>{h(row['invoice_no'])} | {h(row['customer_name'])} | Rs {row['grand_total']:.2f} | Due Rs {row['due']:.2f}</li>"
         for row in sale_rows
     ) or "<li>No sales yet.</li>"
+    purchases_html = "".join(
+        f"<li>{h(row['bill_no'])} | {h(row['item_name'])} | {h(row['vendor_name'])} | Rs {row['total']:.2f}</li>"
+        for row in purchase_rows
+    ) or "<li>No purchases yet.</li>"
     expenses_html = "".join(
         f"<li>{h(row['expense_date'])} | {h(row['category'])} | Rs {row['amount']:.2f} "
         f"<form method='post' action='/delete-expense' style='display:inline'><input type='hidden' name='lang' value='{lang}'><input type='hidden' name='expense_id' value='{row['id']}'><button class='alt' type='submit'>Delete</button></form></li>"
         for row in expense_rows
     ) or "<li>No recent expenses.</li>"
+    activity_html = "".join(
+        f"<li><strong>{h(row['type'].upper())}</strong> | {h(row['date'])} | {h(row['title'])} | {h(row['detail'])}</li>"
+        for row in activity_rows
+    ) or "<li>No activity yet.</li>"
+    metrics_strip = (
+        f"<div class='metric-chip'><span>Sales</span><strong>Rs {metrics['sales']:.0f}</strong></div>"
+        f"<div class='metric-chip'><span>Cash</span><strong>Rs {metrics['cash']:.0f}</strong></div>"
+        f"<div class='metric-chip'><span>Due</span><strong>Rs {metrics['due']:.0f}</strong></div>"
+        f"<div class='metric-chip'><span>Stock</span><strong>Rs {metrics['stock_value']:.0f}</strong></div>"
+    )
+    quick_actions = (
+        "<a class='action-tile active' href='#quick-entry-panel'><span class='action-icon'>+</span><span>Quick Entry</span></a>"
+        "<a class='action-tile' href='#sale-panel'><span class='action-icon'>Rs</span><span>Billing</span></a>"
+        "<a class='action-tile' href='#inventory-panel'><span class='action-icon'>[]</span><span>Stock</span></a>"
+        "<a class='action-tile' href='#ledger-panel'><span class='action-icon'>||</span><span>Ledger</span></a>"
+    )
     return f"""<!doctype html>
 <html lang="{lang}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{h(manager.shop_name())}</title>
-<meta name="theme-color" content="#115e59">
+<meta name="theme-color" content="#171717">
 <link rel="manifest" href="/manifest.json">
 <style>
-body{{margin:0;font-family:Segoe UI,Arial,sans-serif;background:#f5f1e8;color:#1f2937}}
-.wrap{{max-width:1200px;margin:auto;padding:18px}}
-.hero{{background:linear-gradient(135deg,#0f766e,#f59e0b);color:#fff;border-radius:24px;padding:22px;box-shadow:0 12px 36px rgba(0,0,0,.12)}}
-.hero h1{{margin:0 0 8px;font-size:2rem}}
-.hero p{{margin:6px 0}}
-.phone-link{{display:inline-block;margin-top:8px;padding:10px 14px;border-radius:999px;background:#fff;color:#0f766e;text-decoration:none;font-weight:700}}
-.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:16px}}
-.card{{background:#fff;border-radius:20px;padding:16px;box-shadow:0 10px 28px rgba(15,23,42,.08)}}
-.metric{{font-size:1.8rem;font-weight:700;margin-top:8px}}
-form{{display:grid;gap:8px}}
-input,textarea,select,button{{font:inherit;padding:10px 12px;border-radius:12px;border:1px solid #d4d4d8}}
-button{{background:#0f766e;color:#fff;border:none;font-weight:700}}
-button.alt{{background:#f59e0b;color:#111827}}
-table{{width:100%;border-collapse:collapse;font-size:.95rem}}
-th,td{{padding:8px;border-bottom:1px solid #e5e7eb;text-align:left}}
-ul{{margin:0;padding-left:18px}}
-.flash{{margin:14px 0;padding:12px 14px;background:#dcfce7;color:#166534;border-radius:14px}}
-.topbar{{display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-top:12px}}
+*{{box-sizing:border-box}}
+html{{scroll-behavior:smooth}}
+body{{margin:0;font-family:Segoe UI,Arial,sans-serif;background:#0d0d0d;color:#f5f5f5}}
+.wrap{{max-width:1150px;margin:auto;padding:16px 16px 100px}}
+.hero{{background:linear-gradient(135deg,#2a1f05 0%,#ffb02e 65%,#f59e0b 100%);color:#fff;border-radius:24px;padding:22px;box-shadow:0 18px 50px rgba(0,0,0,.28);position:relative;overflow:hidden}}
+.hero:after{{content:'';position:absolute;right:-10px;bottom:-10px;width:140px;height:140px;border-radius:50%;background:rgba(255,255,255,.08)}}
+.hero h1{{margin:0 0 6px;font-size:2rem;max-width:280px}}
+.hero p{{margin:6px 0;color:rgba(255,255,255,.9)}}
+.hero-actions{{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}}
+.phone-link{{display:inline-flex;align-items:center;justify-content:center;padding:11px 14px;border-radius:14px;background:#111;color:#ffbc42;text-decoration:none;font-weight:700;border:1px solid rgba(255,188,66,.25)}}
+.metric-row{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:16px}}
+.metric-chip{{background:#151515;border:1px solid rgba(255,188,66,.12);border-radius:18px;padding:12px}}
+.metric-chip span{{display:block;font-size:.76rem;color:#a3a3a3;text-transform:uppercase;letter-spacing:.08em}}
+.metric-chip strong{{display:block;margin-top:5px;font-size:1rem;color:#fff}}
+.flash{{margin:14px 0;padding:12px 14px;background:#1f4d2d;color:#d5f7dd;border-radius:14px}}
+.quick-grid{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:16px}}
+.action-tile{{background:#171717;border:1px solid rgba(255,255,255,.06);border-radius:20px;padding:16px 10px;display:flex;flex-direction:column;gap:12px;text-decoration:none;color:#f5f5f5;min-height:112px;justify-content:space-between}}
+.action-tile.active{{border:1px dashed #ffb02e;box-shadow:inset 0 0 0 1px rgba(255,176,46,.12)}}
+.action-icon{{display:inline-flex;align-items:center;justify-content:center;width:38px;height:38px;border-radius:12px;background:#222;color:#ffb02e;font-weight:700}}
+.layout{{display:grid;grid-template-columns:1.15fr .95fr;gap:16px;margin-top:16px}}
+.stack{{display:grid;gap:16px}}
+.card{{background:#141414;border:1px solid rgba(255,255,255,.06);border-radius:22px;padding:18px;box-shadow:0 12px 28px rgba(0,0,0,.22)}}
+.card h2{{margin:0 0 12px;font-size:1.1rem;color:#fff}}
+.subtle{{color:#9ca3af;font-size:.92rem}}
+form{{display:grid;gap:10px}}
+input,textarea,select,button{{font:inherit;padding:12px 13px;border-radius:14px;border:1px solid #2a2a2a;background:#101010;color:#f5f5f5}}
+input::placeholder,textarea::placeholder{{color:#737373}}
+button{{background:#ffb02e;color:#151515;border:none;font-weight:700}}
+button.alt{{background:#232323;color:#ffbc42;border:1px solid rgba(255,188,66,.18)}}
 .inline{{display:flex;gap:8px;flex-wrap:wrap}}
-.note{{font-size:.9rem;color:#475569}}
-@media (max-width:700px){{.hero h1{{font-size:1.5rem}} .wrap{{padding:12px}} }}
+.topbar{{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-top:14px}}
+ul{{margin:0;padding-left:18px}}
+li{{margin:0 0 8px}}
+table{{width:100%;border-collapse:collapse;font-size:.94rem}}
+th,td{{padding:10px 8px;border-bottom:1px solid #262626;text-align:left}}
+th{{color:#a3a3a3;font-weight:600}}
+.note{{font-size:.9rem;color:#8d8d8d}}
+.section-tag{{display:inline-flex;padding:6px 10px;border-radius:999px;background:#1f1f1f;color:#ffbc42;font-size:.78rem;margin-bottom:8px}}
+.bottom-nav{{position:fixed;left:50%;transform:translateX(-50%);bottom:12px;width:min(96vw,820px);background:rgba(17,17,17,.94);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.08);border-radius:22px;padding:10px 8px;display:grid;grid-template-columns:repeat(5,1fr);gap:8px;z-index:30;box-shadow:0 20px 50px rgba(0,0,0,.35)}}
+.bottom-nav a{{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:10px 6px;border-radius:16px;text-decoration:none;color:#bdbdbd;font-size:.8rem}}
+.bottom-nav a.active{{background:#ffb02e;color:#151515;font-weight:700}}
+.nav-ico{{font-size:1rem}}
+@media (max-width:980px){{.layout{{grid-template-columns:1fr}} .metric-row{{grid-template-columns:repeat(2,minmax(0,1fr))}}}}
+@media (max-width:720px){{.wrap{{padding:12px 12px 102px}} .hero h1{{font-size:1.55rem}} .quick-grid{{grid-template-columns:repeat(2,minmax(0,1fr))}} .topbar{{display:grid;grid-template-columns:1fr 1fr}} .phone-link{{width:100%}}}}
 </style>
 </head>
 <body>
 <div class="wrap">
 <div class="hero">
+<div class="section-tag">Namaste, Shopkeeper</div>
 <h1>{h(manager.shop_name())}</h1>
 <p>{h(t["tagline"])}</p>
 <p>{h(t["open_phone"])}: <strong>{h(phone_link)}</strong></p>
+<div class="hero-actions">
 <a class="phone-link" href="{h(phone_link)}" target="_blank">{h(t["open_phone"])}</a>
+<button class="phone-link" style="border:none;cursor:pointer" onclick="installApp()">Install App</button>
+</div>
+<div class="metric-row">{metrics_strip}</div>
 </div>
 <div class="topbar">
 <form method="get" class="inline">
@@ -951,27 +1038,46 @@ ul{{margin:0;padding-left:18px}}
 <form method="post" action="/logout" class="inline"><button class="alt" type="submit">Logout</button></form>
 </div>
 {flash_html}
-<div class="grid">
-{card(t["dashboard"], f"<div class='metric'>Rs {metrics['sales']:.2f}</div><div>Sales today</div><div class='note'>Cash Rs {metrics['cash']:.2f} | Due Rs {metrics['due']:.2f}<br>Purchase Rs {metrics['purchases']:.2f} | Expense Rs {metrics['expenses']:.2f}<br>Gross profit Rs {metrics['profit']:.2f} | Stock value Rs {metrics['stock_value']:.2f}</div>")}
-{card(t["quick_entry"], f"<form method='post' action='/quick-entry'><input type='hidden' name='lang' value='{lang}'><textarea id='quickText' name='quick_text' rows='4' placeholder='{h(t['quick_help'])}'></textarea><div class='inline'><button type='submit'>{h(t['save'])}</button><button class='alt' type='button' onclick='startVoice()'>{h(t['voice'])}</button></div><div class='note'>{h(t['quick_help'])}</div></form>")}
-{card(t["add_item"], f"<form method='post' action='/add-item'><input type='hidden' name='lang' value='{lang}'><input name='name' placeholder='Item name'><input name='category' placeholder='Category'><input name='unit' placeholder='Unit'><input name='qty' placeholder='Opening qty'><input name='buy_price' placeholder='Buy price'><input name='sell_price' placeholder='Sell price'><input name='low_stock_limit' placeholder='Low stock limit' value='5'><button type='submit'>{h(t['save'])}</button></form>")}
-{card(t["purchase"], f"<form method='post' action='/purchase'><input type='hidden' name='lang' value='{lang}'><input name='item_name' placeholder='Item name'><input name='vendor_name' placeholder='Vendor name'><input name='qty' placeholder='Qty'><input name='rate' placeholder='Rate'><input name='paid' placeholder='Paid amount'><input name='note' placeholder='Note'><button type='submit'>{h(t['save'])}</button></form>")}
-{card("Stock Adjust", f"<form method='post' action='/adjust-stock'><input type='hidden' name='lang' value='{lang}'><input name='item_name' placeholder='Item name'><select name='adjustment_type'><option value='set'>Set exact qty</option><option value='add'>Add qty</option><option value='remove'>Remove qty</option></select><input name='qty' placeholder='Qty'><button type='submit'>{h(t['save'])}</button></form>")}
-{card(t["sale"], f"<form method='post' action='/sale'><input type='hidden' name='lang' value='{lang}'><input name='customer_name' placeholder='Customer name'><input name='customer_phone' placeholder='Phone'><textarea name='items' rows='4' placeholder='One line each: sugar,2,50'></textarea><input name='discount' placeholder='Discount' value='0'><select name='payment_mode'><option value='cash'>Cash</option><option value='upi'>UPI</option><option value='card'>Card</option><option value='credit'>Credit/Udhaar</option></select><input name='paid' placeholder='Paid amount'><input name='note' placeholder='Note'><button type='submit'>{h(t['save'])}</button></form>")}
-{card(t["expense"], f"<form method='post' action='/expense'><input type='hidden' name='lang' value='{lang}'><input name='category' placeholder='Expense type'><input name='amount' placeholder='Amount'><input name='note' placeholder='Note'><button type='submit'>{h(t['save'])}</button></form>")}
-{card("Reverse Invoice", f"<form method='post' action='/reverse-invoice'><input type='hidden' name='lang' value='{lang}'><input name='invoice_no' placeholder='Invoice no e.g. INV-20260322-001'><button class='alt' type='submit'>Reverse Invoice</button></form><div class='note'>Use only when full sale cancellation karni ho.</div>")}
-{card("Customer Payment", f"<form method='post' action='/customer-payment'><input type='hidden' name='lang' value='{lang}'><input name='customer_name' placeholder='Customer name'><input name='amount' placeholder='Amount received'><button type='submit'>{h(t['save'])}</button></form>")}
-{card("Vendor Payment", f"<form method='post' action='/vendor-payment'><input type='hidden' name='lang' value='{lang}'><input name='vendor_name' placeholder='Vendor name'><input name='amount' placeholder='Amount paid'><button type='submit'>{h(t['save'])}</button></form>")}
-{card("Settings", f"<form method='post' action='/settings'><input type='hidden' name='lang' value='{lang}'><input name='shop_name' placeholder='Shop name' value='{h(manager.shop_name())}'><input name='app_pin' placeholder='New PIN'><input name='telegram_chat_id' placeholder='Telegram chat id' value='{h(manager.get_setting('telegram_chat_id',''))}'><label><input type='checkbox' name='telegram_enabled' value='1' {'checked' if manager.get_setting('telegram_enabled','0')=='1' else ''}> Telegram enabled</label><button type='submit'>{h(t['save'])}</button></form><div class='note'>Telegram token ko system environment variable `TELEGRAM_BOT_TOKEN` me set rakhiye.</div>")}
-{card(t["low_stock"], f"<ul>{low_html}</ul>")}
-{card(t["ledger"], f"<strong>Customer Due</strong><ul>{customer_html}</ul><strong>Vendor Due</strong><ul>{vendor_html}</ul>")}
-{card(t["recent_sales"], f"<ul>{sales_html}</ul>")}
-{card("Recent Expenses", f"<ul>{expenses_html}</ul>")}
-{card(t["inventory"], f"<div style='overflow:auto'><table><thead><tr><th>Item</th><th>Category</th><th>Qty</th><th>Unit</th><th>Buy</th><th>Sell</th><th>Action</th></tr></thead><tbody>{inventory_html}</tbody></table></div>")}
+<div class="quick-grid">{quick_actions}</div>
+<div class="layout">
+<div class="stack">
+{card("Dashboard Snapshot", f"<div class='section-tag'>Today</div><div class='subtle'>Cash Rs {metrics['cash']:.2f} | Due Rs {metrics['due']:.2f} | Purchase Rs {metrics['purchases']:.2f}</div><div class='subtle' style='margin-top:8px'>Expense Rs {metrics['expenses']:.2f} | Gross profit Rs {metrics['profit']:.2f}</div>")}
+{card(t["quick_entry"], f"<div id='quick-entry-panel'></div><div class='section-tag'>Fastest Way</div><form method='post' action='/quick-entry'><input type='hidden' name='lang' value='{lang}'><textarea id='quickText' name='quick_text' rows='4' placeholder='{h(t['quick_help'])}'></textarea><div class='inline'><button type='submit'>{h(t['save'])}</button><button class='alt' type='button' onclick='startVoice()'>{h(t['voice'])}</button></div><div class='note'>Short spoken/text commands best kaam karte hain.</div></form>")}
+{card("Billing & Collection", f"<div id='sale-panel'></div><div class='section-tag'>Primary Flow</div><form method='post' action='/sale'><input type='hidden' name='lang' value='{lang}'><input name='customer_name' placeholder='Customer name'><input name='customer_phone' placeholder='Phone'><textarea name='items' rows='4' placeholder='One line each: sugar,2,50'></textarea><input name='discount' placeholder='Discount' value='0'><select name='payment_mode'><option value='cash'>Cash</option><option value='upi'>UPI</option><option value='card'>Card</option><option value='credit'>Credit/Udhaar</option></select><input name='paid' placeholder='Paid amount'><input name='note' placeholder='Note'><button type='submit'>Generate Bill</button></form><div class='inline' style='margin-top:10px'><form method='post' action='/customer-payment'><input type='hidden' name='lang' value='{lang}'><input name='customer_name' placeholder='Customer name'><input name='amount' placeholder='Amount received'><button class='alt' type='submit'>Receive Payment</button></form></div><div class='inline'><form method='post' action='/reverse-invoice'><input type='hidden' name='lang' value='{lang}'><input name='invoice_no' placeholder='Invoice no'><button class='alt' type='submit'>Reverse Invoice</button></form></div>")}
+{card("Inventory & Purchase", f"<div id='inventory-panel'></div><div class='section-tag'>Stock Room</div><form method='post' action='/add-item'><input type='hidden' name='lang' value='{lang}'><input name='name' placeholder='Item name'><input name='category' placeholder='Category'><input name='unit' placeholder='Unit'><input name='qty' placeholder='Opening qty'><input name='buy_price' placeholder='Buy price'><input name='sell_price' placeholder='Sell price'><input name='low_stock_limit' placeholder='Low stock limit' value='5'><button type='submit'>Add Item</button></form><div class='inline' style='margin-top:10px'><form method='post' action='/purchase'><input type='hidden' name='lang' value='{lang}'><input name='item_name' placeholder='Item name'><input name='vendor_name' placeholder='Vendor'><input name='qty' placeholder='Qty'><input name='rate' placeholder='Rate'><input name='paid' placeholder='Paid'><input name='note' placeholder='Note'><button class='alt' type='submit'>Restock</button></form></div><div class='inline'><form method='post' action='/adjust-stock'><input type='hidden' name='lang' value='{lang}'><input name='item_name' placeholder='Item name'><select name='adjustment_type'><option value='set'>Set qty</option><option value='add'>Add qty</option><option value='remove'>Remove qty</option></select><input name='qty' placeholder='Qty'><button class='alt' type='submit'>Adjust Stock</button></form></div>")}
+{card(t["inventory"], f"<input id='inventorySearch' placeholder='Search inventory...' oninput='filterInventory()'><div style='overflow:auto;margin-top:10px'><table id='inventoryTable'><thead><tr><th>Item</th><th>Category</th><th>Qty</th><th>Unit</th><th>Buy</th><th>Sell</th><th>Action</th></tr></thead><tbody>{inventory_html}</tbody></table></div><div class='note'>Saved entries isi deployed site me store hoti hain, isliye same account URL par phone aur PC dono updated data dekhenge.</div>")}
 </div>
+<div class="stack">
+{card("Smart Overview", f"<div class='section-tag'>At a Glance</div><div class='subtle'>Low stock items aur latest sales yahan quick scan ke liye rakhe gaye hain.</div><div style='margin-top:12px'><strong>Low Stock</strong><ul>{low_html}</ul><strong>Recent Sales</strong><ul>{sales_html}</ul></div>")}
+{card(t["ledger"], f"<div id='ledger-panel'></div><div class='section-tag'>Ledger</div><strong>Customer Due</strong><ul>{customer_html}</ul><strong>Vendor Due</strong><ul>{vendor_html}</ul><div class='inline' style='margin-top:12px'><form method='post' action='/vendor-payment'><input type='hidden' name='lang' value='{lang}'><input name='vendor_name' placeholder='Vendor name'><input name='amount' placeholder='Amount paid'><button class='alt' type='submit'>Pay Vendor</button></form></div>")}
+{card("Recent Activity", f"<div class='section-tag'>Live Feed</div><ul>{activity_html}</ul>")}
+{card("Recent Purchases", f"<div class='section-tag'>Purchase Feed</div><ul>{purchases_html}</ul>")}
+{card("Recent Expenses", f"<div class='section-tag'>Expense Feed</div><ul>{expenses_html}</ul>")}
+{card("Workspace Settings", f"<div id='settings-panel'></div><div class='section-tag'>Control</div><form method='post' action='/expense'><input type='hidden' name='lang' value='{lang}'><input name='category' placeholder='Expense type'><input name='amount' placeholder='Amount'><input name='note' placeholder='Note'><button type='submit'>Add Expense</button></form><div class='inline' style='margin-top:10px'><form method='post' action='/settings'><input type='hidden' name='lang' value='{lang}'><input name='shop_name' placeholder='Shop name' value='{h(manager.shop_name())}'><input name='app_pin' placeholder='New PIN'><input name='telegram_chat_id' placeholder='Telegram chat id' value='{h(manager.get_setting('telegram_chat_id',''))}'><label class='note'><input type='checkbox' name='telegram_enabled' value='1' {'checked' if manager.get_setting('telegram_enabled','0')=='1' else ''}> Telegram enabled</label><button class='alt' type='submit'>Save Settings</button></form></div><div class='note'>Telegram token ko host environment me set rakhiye.</div>")}
+</div>
+</div>
+<nav class="bottom-nav">
+<a class="active" href="#quick-entry-panel"><span class="nav-ico">Home</span><span>Home</span></a>
+<a href="#ledger-panel"><span class="nav-ico">Ledger</span><span>Ledger</span></a>
+<a href="#quick-entry-panel"><span class="nav-ico">AI</span><span>Quick</span></a>
+<a href="#sale-panel"><span class="nav-ico">Bill</span><span>Bill</span></a>
+<a href="#inventory-panel"><span class="nav-ico">Stock</span><span>Stock</span></a>
+</nav>
 </div>
 <script>
 if ('serviceWorker' in navigator) {{ window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js')); }}
+let deferredPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {{
+  e.preventDefault();
+  deferredPrompt = e;
+}});
+function installApp(){{
+  if (deferredPrompt) {{
+    deferredPrompt.prompt();
+  }} else {{
+    alert('Browser menu me Add to Home Screen use kijiye.');
+  }}
+}}
 function startVoice(){{
   const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
   if(!Speech){{ alert('Voice input browser me supported nahi hai. Chrome Android try kijiye.'); return; }}
@@ -982,6 +1088,19 @@ function startVoice(){{
   recog.onresult = function(event){{ document.getElementById('quickText').value = event.results[0][0].transcript; }};
   recog.start();
 }}
+function filterInventory(){{
+  const term = (document.getElementById('inventorySearch').value || '').toLowerCase();
+  const rows = document.querySelectorAll('#inventoryTable tbody tr');
+  rows.forEach(row => {{
+    row.style.display = row.innerText.toLowerCase().includes(term) ? '' : 'none';
+  }});
+}}
+document.querySelectorAll('.bottom-nav a').forEach(link => {{
+  link.addEventListener('click', () => {{
+    document.querySelectorAll('.bottom-nav a').forEach(x => x.classList.remove('active'));
+    link.classList.add('active');
+  }});
+}});
 </script>
 </body>
 </html>"""
