@@ -1,0 +1,305 @@
+🎤 VOICE COMMAND QUICK REFERENCE
+═════════════════════════════════════════════════════════════════════
+
+BASIC FORMAT:
+─────────────────────────────────────────────────────────────────────
+"[PARTY_NAME] [MATERIAL] [VEHICLE] [QUANTITY] [TRIPS] [RATE] [PAYMENT]"
+
+
+📋 COMMAND EXAMPLES
+─────────────────────────────────────────────────────────────────────
+
+EXAMPLE 1 - Basic Transaction:
+────────────────────────────────
+Say: "Ramesh reti tractor 6 1200 udhar"
+Extracted:
+  • Party: Ramesh
+  • Material: reti (sand)
+  • Vehicle: tractor
+  • Quantity: 6 tons
+  • Rate: ₹1200 per ton
+  • Payment: udhar (pending/credit)
+  • Total Amount: ₹7,200
+
+EXAMPLE 2 - With Trips:
+──────────────────────
+Say: "Amit balu truck 10 trip 800 paid"
+Extracted:
+  • Party: Amit
+  • Material: balu (sand)
+  • Vehicle: truck
+  • Quantity: 10 tons
+  • Trips: 1 trip
+  • Rate: ₹800 per ton
+  • Payment: paid (cash)
+  • Total Amount: ₹8,000
+
+EXAMPLE 3 - Partial Payment:
+────────────────────────────
+Say: "Priya stone tractor 5 1500 advance"
+Extracted:
+  • Party: Priya
+  • Material: stone
+  • Vehicle: tractor
+  • Quantity: 5 tons
+  • Rate: ₹1500 per ton
+  • Payment: advance (partial)
+  • Total Amount: ₹7,500
+
+EXAMPLE 4 - Multiple Trips:
+─────────────────────────────
+Say: "Sharma mitti tempo 20 5 trip 600 udhar"
+Extracted:
+  • Party: Sharma
+  • Material: mitti (soil)
+  • Vehicle: tempo
+  • Quantity: 20 units
+  • Trips: 5
+  • Rate: ₹600 per unit
+  • Payment: udhar (pending)
+  • Total Amount: ₹12,000
+
+EXAMPLE 5 - No Vehicle:
+──────────────────────────
+Say: "Suresh cement 8 2500 paid"
+Extracted:
+  • Party: Suresh
+  • Material: cement
+  • Vehicle: (not specified)
+  • Quantity: 8 bags
+  • Rate: ₹2500 per bag
+  • Payment: paid
+  • Total Amount: ₹20,000
+
+
+🗂️ PARTY NAMES (Examples)
+─────────────────────────────────────────────────────────────────────
+Say the first letter capitalized:
+  • Ramesh (राम्श) → Ramesh
+  • Amit (अमित) → Amit
+  • Priya (प्रिया) → Priya
+  • Sharma (शर्मा) → Sharma
+  • Patel (पटेल) → Patel
+  • Verma (वर्मा) → Verma
+
+
+📦 MATERIALS (All Recognized)
+─────────────────────────────────────────────────────────────────────
+
+AGGREGATE/SAND:
+  reti, sand, balu, बालू
+
+SOIL:
+  mitti, मिट्टी
+
+STONE:
+  stone, gravel, स्टोन, बजरी
+
+CEMENT:
+  cement, सीमेंट
+
+BRICK:
+  brick, ईंट
+
+CREATE CUSTOM:
+  Add any material via "Manage Materials" on dashboard
+
+
+🚜 VEHICLES (All Recognized)
+─────────────────────────────────────────────────────────────────────
+
+2-WHEELER:
+  bike, बाइक
+
+3-WHEELER:
+  auto, अटो, tempo, टेम्पो, tata, टाटा
+
+4-WHEELER:
+  tractor, ट्रैक्टर
+  truck, ट्रक
+  chhota (small truck)
+  bada (big truck)
+
+CREATE CUSTOM:
+  Add with registration number via "Manage Vehicles"
+
+
+💰 PAYMENT STATUS
+─────────────────────────────────────────────────────────────────────
+
+UDHAR (PENDING - CREDIT):
+  Say: "udhar", "उधार", "credit", "क्रेडिट"
+  Status: Pending (not paid yet, customer owes money)
+  Use: when customer takes goods on credit
+
+PAID (CASH/IMMEDIATE):
+  Say: "paid", "पेइड", "cash", "नगद", "pay"
+  Status: Paid (customer paid in full)
+  Use: when customer pays immediately
+
+ADVANCE (PARTIAL - PARTIAL PAYMENT):
+  Say: "advance", "एडवांस", "partial", "आंशिक"
+  Status: Partial (customer paid some, rest pending)
+  Use: when customer pays partial amount
+
+
+📊 QUANTITY FORMATS (All Work)
+─────────────────────────────────────────────────────────────────────
+  6 tons      → quantity: 6
+  6 tonne     → quantity: 6
+  six tons    → quantity: 6 (if recognized)
+  20 bags     → quantity: 20
+  10 units    → quantity: 10
+  2.5 tons    → quantity: 2.5 (decimal works)
+
+
+⏱️ TRIP DETAILS
+─────────────────────────────────────────────────────────────────────
+
+OPTIONAL:
+  • If not mentioned: Assumed 1 trip
+  • If mentioned: "6 trip" = 6 trips
+
+EXAMPLES:
+  "Ramesh reti tractor 10 trip 800" 
+    → 10 tons in 1 trip, not 10 trips!
+    
+  "Amit balu truck 20 5 trip 600"
+    → 20 tons, 5 trips, ₹600 per ton
+    
+  "Priya stone 15 3 trip 1500"
+    → 15 tons in 3 trips, ₹1500 per ton
+
+
+💡 QUICK TIPS
+─────────────────────────────────────────────────────────────────────
+
+TIP 1: Clear Speech
+  Speak slowly and clearly
+  Pause between different fields
+  Avoid background noise
+
+TIP 2: Order Matters
+  Party → Material → Vehicle → Quantity → Trips → Rate → Payment
+  Try to maintain this order for better parsing
+
+TIP 3: Common Mistakes to Avoid
+  ✗ "Ramesh 6 reti tractor 1200" (wrong order)
+  ✓ "Ramesh reti tractor 6 1200" (correct)
+  
+  ✗ "Ramesh sand tractor six tons 1200" (too verbose)
+  ✓ "Ramesh sand tractor 6 1200" (simple)
+
+TIP 4: If Parser Fails
+  • Click "Clear" and try again
+  • Speak slower and clearer
+  • Simplify your command
+  • Add partial command first, edit in form
+
+TIP 5: No Vehicle?
+  No problem! Skip and go to material/quantity/rate
+  "Ramesh cement 8 2500 paid" (no vehicle)
+
+
+🎯 COMMON COMMANDS AT A GLANCE
+─────────────────────────────────────────────────────────────────────
+
+Morning (Sand delivery):
+  "Ramesh balu truck 10 800 paid"
+  "Amit sand tempo 8 850 udhar"
+  "Sharma reti tractor 15 950 paid"
+
+Afternoon (Material):
+  "Patel mitti truck 20 600 udhar"
+  "Verma stone tractor 12 1500 paid"
+  "Suresh brick tractor 5000 500 advance"
+
+Evening (Mixed):
+  "Rajesh cement 10 2500 paid"
+  "Deepak gravel tempo 12 700 udhar"
+  "Nisha sand tractor 6 2 trip 1200 paid"
+
+
+🔍 DEBUG MODE - CHECK PARSING
+─────────────────────────────────────────────────────────────────────
+
+After speaking, the system shows:
+  ✓ Raw Text: What you said
+  ✓ Parsed Party: Extracted name
+  ✓ Parsed Material: Identified material
+  ✓ Parsed Vehicle: Found vehicle
+  ✓ Parsed Quantity: Extracted number
+  ✓ Parsed Rate: Found rupee amount
+  ✓ Parsed Trips: Number of trips
+  ✓ Parsed Status: Payment status
+
+If any field is empty:
+  → Manually fill in the form before saving
+  → Or try speaking again with clearer pronunciation
+  → Or add party/material first if not recognized
+
+
+⚡ BULK OPERATIONS
+─────────────────────────────────────────────────────────────────────
+
+Create Multiple Entries:
+  1. "Ramesh balu truck 10 800 paid"
+  2. "Amit stone tractor 5 1500 udhar"
+  3. "Priya mitti tempo 20 600 paid"
+  4. Repeat voice commands
+  5. Each creates separate transaction
+
+Add Parties/Materials First:
+  1. Go to "Manage Parties" → Add Ramesh, Amit, Priya
+  2. Go to "Manage Materials" → Add/confirm balu, stone, mitti
+  3. Go to "Manage Vehicles" → Add truck, tractor, tempo
+  4. Then use voice commands - will work faster!
+
+
+📱 PHONE USAGE
+─────────────────────────────────────────────────────────────────────
+
+Voice on Mobile:
+  ✓ Works! Use phone microphone
+  ✓ Browser speech API works on mobile
+  ✓ Click 🎤 button, speak, result appears
+  ✓ Works on Chrome, Edge, Safari
+
+Which Browser to Use:
+  ✓ Best: Google Chrome
+  ✓ Good: Microsoft Edge, Safari
+  ✗ Poor: Firefox, Internet Explorer
+
+
+═════════════════════════════════════════════════════════════════════
+
+💬 EXAMPLE CONVERSATION
+
+User speaks: "Ramesh balu truck 10 trip 800"
+System shows:
+  Party: Ramesh ✓
+  Material: balu ✓
+  Vehicle: truck ✓
+  Quantity: 10 ✓
+  Trips: 1 ✓
+  Rate: 800 ✓
+  Payment Status: pending (default) ✓
+
+Then:
+  1. System shows: "Create Transaction from Voice" button
+  2. Click button
+  3. Transaction saved instantly!
+  4. Invoice generated automatically
+  5. Ledger updated with new entry
+
+═════════════════════════════════════════════════════════════════════
+
+✅ YOU'RE READY TO USE VOICE COMMANDS!
+
+Go to: http://192.168.1.23:5000 (from phone)
+Or: http://localhost:5000 (from laptop)
+Login: admin / Admin@1234
+Dashboard → Click 🎤 Start Recording
+Say your command!
+
+═════════════════════════════════════════════════════════════════════
